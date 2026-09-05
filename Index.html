@@ -24,6 +24,23 @@
     background:var(--bg);
     font-family:var(--font);
     color:var(--fg);
+    overflow-x:hidden;
+  }
+
+  /* matrix rain canvas, sits behind everything */
+  #matrix-bg{
+    position:fixed; inset:0;
+    z-index:0;
+    opacity:0.5;
+  }
+
+  /* cursor-tracking glow, follows mouse via --mx/--my */
+  #glow{
+    position:fixed; inset:0;
+    z-index:1;
+    pointer-events:none;
+    background:radial-gradient(circle 260px at var(--mx,50%) var(--my,50%), rgba(57,255,106,0.14), transparent 60%);
+    transition:opacity .3s ease;
   }
 
   /* subtle scanlines + vignette over whole page */
@@ -41,6 +58,11 @@
     z-index:5;
     mix-blend-mode:multiply;
     opacity:0.35;
+    animation:scan-drift 9s linear infinite;
+  }
+  @keyframes scan-drift{
+    0%{ background-position:0 0; }
+    100%{ background-position:0 120px; }
   }
   body::after{
     content:"";
@@ -56,11 +78,15 @@
     justify-content:center;
     min-height:100vh;
     padding:24px;
+    position:relative;
   }
 
   .crt{
     width:100%;
     max-width:720px;
+    position:relative;
+    z-index:2;
+    perspective:900px;
   }
 
   /* ===== Window chrome ===== */
@@ -72,6 +98,21 @@
       0 0 40px rgba(57,255,106,0.06),
       0 20px 60px rgba(0,0,0,0.6);
     text-shadow:0 0 6px rgba(57,255,106,0.35);
+    transform-style:preserve-3d;
+    transition:transform .15s ease-out, box-shadow .2s ease;
+    will-change:transform;
+  }
+
+  /* occasional CRT power-flicker, toggled via JS */
+  .window.flicker{
+    animation:crt-flicker .15s steps(2, end);
+  }
+  @keyframes crt-flicker{
+    0%{ opacity:1; }
+    30%{ opacity:0.72; }
+    45%{ opacity:1; }
+    60%{ opacity:0.85; }
+    100%{ opacity:1; }
   }
 
   .titlebar{
@@ -157,6 +198,45 @@
     animation:blink 1s steps(1) infinite;
   }
   @keyframes blink{ 50%{ opacity:0; } }
+
+  /* glitch on name hover: RGB-split slices */
+  .id .name{
+    position:relative;
+    display:inline-block;
+    cursor:default;
+  }
+  .id .name .glitch-text{ position:relative; }
+  .id .name:hover .glitch-text::before,
+  .id .name:hover .glitch-text::after{
+    content:attr(data-text);
+    position:absolute;
+    left:0; top:0;
+    width:100%;
+    overflow:hidden;
+    background:var(--bg-panel);
+  }
+  .id .name:hover .glitch-text::before{
+    color:var(--red);
+    animation:glitch-1 .35s infinite linear alternate-reverse;
+  }
+  .id .name:hover .glitch-text::after{
+    color:var(--amber);
+    animation:glitch-2 .35s infinite linear alternate-reverse;
+  }
+  @keyframes glitch-1{
+    0%{ clip-path:inset(0 0 85% 0); transform:translate(-2px,-1px); }
+    25%{ clip-path:inset(20% 0 60% 0); transform:translate(2px,1px); }
+    50%{ clip-path:inset(50% 0 20% 0); transform:translate(-1px,1px); }
+    75%{ clip-path:inset(70% 0 5% 0); transform:translate(2px,-1px); }
+    100%{ clip-path:inset(10% 0 75% 0); transform:translate(-2px,0); }
+  }
+  @keyframes glitch-2{
+    0%{ clip-path:inset(60% 0 10% 0); transform:translate(2px,1px); }
+    25%{ clip-path:inset(10% 0 70% 0); transform:translate(-2px,-1px); }
+    50%{ clip-path:inset(35% 0 45% 0); transform:translate(1px,-1px); }
+    75%{ clip-path:inset(5% 0 80% 0); transform:translate(-2px,1px); }
+    100%{ clip-path:inset(55% 0 20% 0); transform:translate(2px,0); }
+  }
 
   .id .role{
     font-size:12px;
@@ -384,6 +464,9 @@
 </head>
 <body>
 
+<canvas id="matrix-bg"></canvas>
+<div id="glow"></div>
+
 <div class="crt">
   <div class="window">
     <div class="titlebar">
@@ -402,7 +485,7 @@
             AVATAR<br>PLACEHOLDER
           </div>
           <div class="id">
-            <div class="name">@SnowyTheCat<span class="cursor"></span></div>
+            <div class="name"><span class="glitch-text" data-text="@SnowyTheCat">@SnowyTheCat</span><span class="cursor"></span></div>
             <div class="role">DEVELOPER</div>
             <div class="loc">Almaty</div>
           </div>
@@ -516,6 +599,93 @@
 </div>
 
 <script>
+  // ---- matrix rain background ----
+  (function(){
+    const canvas = document.getElementById('matrix-bg');
+    const ctx = canvas.getContext('2d');
+    const chars = "01アイウエオカキクケコサシスセソタチツテトABCDEFGHIJKLMNOPQRSTUVWXYZ$#%&";
+    let cols, drops, fontSize = 15;
+
+    function resize(){
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      cols = Math.floor(canvas.width / fontSize);
+      drops = new Array(cols).fill(0).map(()=> Math.random() * -100);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function draw(){
+      ctx.fillStyle = 'rgba(6,10,7,0.08)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = fontSize + 'px monospace';
+      for(let i=0; i<drops.length; i++){
+        const text = chars[Math.floor(Math.random() * chars.length)];
+        const x = i * fontSize;
+        const y = drops[i] * fontSize;
+        const isLead = Math.random() > 0.94;
+        ctx.fillStyle = isLead ? 'rgba(200,255,215,0.9)' : 'rgba(57,255,106,0.5)';
+        ctx.fillText(text, x, y);
+        if(y > canvas.height && Math.random() > 0.975){
+          drops[i] = 0;
+        }
+        drops[i]++;
+      }
+    }
+
+    if(!reduceMotion){
+      setInterval(draw, 55);
+    }else{
+      canvas.style.display = 'none';
+    }
+  })();
+
+  // ---- cursor glow + subtle 3D tilt on the window ----
+  (function(){
+    const glow = document.getElementById('glow');
+    const windowEl = document.querySelector('.window');
+    const crtEl = document.querySelector('.crt');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reduceMotion) return;
+
+    window.addEventListener('pointermove', (e)=>{
+      glow.style.setProperty('--mx', e.clientX + 'px');
+      glow.style.setProperty('--my', e.clientY + 'px');
+
+      const rect = crtEl.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dx = (e.clientX - cx) / (rect.width / 2);
+      const dy = (e.clientY - cy) / (rect.height / 2);
+      const maxTilt = 4;
+      windowEl.style.transform =
+        `rotateX(${(-dy * maxTilt).toFixed(2)}deg) rotateY(${(dx * maxTilt).toFixed(2)}deg)`;
+    });
+
+    window.addEventListener('pointerleave', ()=>{
+      windowEl.style.transform = 'rotateX(0deg) rotateY(0deg)';
+    });
+  })();
+
+  // ---- occasional CRT power-flicker ----
+  (function(){
+    const windowEl = document.querySelector('.window');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reduceMotion) return;
+
+    function scheduleFlicker(){
+      const delay = 4000 + Math.random() * 9000;
+      setTimeout(()=>{
+        windowEl.classList.add('flicker');
+        setTimeout(()=> windowEl.classList.remove('flicker'), 200);
+        scheduleFlicker();
+      }, delay);
+    }
+    scheduleFlicker();
+  })();
+
   // ---- boot sequence typing effect ----
   const bootLines = [
     "C:\\> initializing profile...",
